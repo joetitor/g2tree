@@ -19,6 +19,7 @@ def read_graph_data(input_file):
             graph_i['g_ids_features'] = jo['g_ids_features']
             graph_i['g_adj'] = jo['g_adj']
             graph_i['word_list'] = jo['word_list']
+            graph_i['word_len'] = jo['word_len']
             graphs_new.append(graph_i)
     return graphs_new
 
@@ -28,11 +29,13 @@ def cons_batch_graph(graphs):
     g_fw_adj = {}
     g_bw_adj = {}
     g_nodes = []
+    g_word_len = []
     for g in graphs:
         ids = g['g_ids']
         id_adj = g['g_adj']
         features = g['g_ids_features']
-
+        word_len = g['word_len']
+        g_word_len.append(word_len)
         nodes = []
 
         # we first add all nodes into batch_graph and create a mapping from graph id to batch_graph id, this mapping will be
@@ -75,6 +78,7 @@ def cons_batch_graph(graphs):
     graph['g_nodes'] = g_nodes
     graph['g_fw_adj'] = g_fw_adj
     graph['g_bw_adj'] = g_bw_adj
+    graph['word_len'] = g_word_len
     return graph
 
 def vectorize_batch_graph(graph, word_manager):
@@ -145,4 +149,5 @@ def vectorize_batch_graph(graph, word_manager):
     gv['g_nodes'] =np.array(graph['g_nodes'])
     gv['g_bw_adj'] = np.array(g_bw_adj_v)
     gv['g_fw_adj'] = np.array(g_fw_adj_v)
+    gv['word_len'] = graph['word_len']
     return gv

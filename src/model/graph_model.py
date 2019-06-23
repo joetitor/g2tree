@@ -28,8 +28,8 @@ class GraphEncoder(nn.Module):
         self.sample_layer_size = opt.sample_layer_size
         self.hidden_layer_dim = opt.rnn_size
 
-        self.word_embedding_size = self.hidden_layer_dim
-
+        # self.word_embedding_size = self.hidden_layer_dim
+        self.word_embedding_size = 300
         self.embedding = nn.Embedding(
             input_size, self.word_embedding_size, padding_idx=0)
 
@@ -69,6 +69,8 @@ class GraphEncoder(nn.Module):
                                self.fw_aggregator_3, self.fw_aggregator_4, self.fw_aggregator_5, self.fw_aggregator_6]
         self.bw_aggregators = [self.bw_aggregator_0, self.bw_aggregator_1, self.bw_aggregator_2,
                                self.bw_aggregator_3, self.bw_aggregator_4, self.bw_aggregator_5, self.bw_aggregator_6]
+        # self.fw_aggregators = [self.fw_aggregator_0]
+        # self.bw_aggregators = [self.bw_aggregator_0]
 
         self.Linear_hidden = nn.Linear(
             2 * self.hidden_layer_dim, self.hidden_layer_dim)
@@ -78,18 +80,49 @@ class GraphEncoder(nn.Module):
         self.using_gpu = False
         if self.opt.gpuid > -1:
             self.using_gpu = True
+        self.embedding_bilstm = nn.LSTM(input_size=self.word_embedding_size, hidden_size=self.hidden_layer_dim/2, bidirectional=True, bias = True, batch_first = True)
+        self.padding_vector = torch.randn(1,self.hidden_layer_dim, dtype = torch.float, requires_grad=True)
 
     def forward(self, graph_batch):
         # graph_encoding preparation
-        fw_adj_info, bw_adj_info, feature_info, batch_nodes = graph_batch
+        fw_adj_info, bw_adj_info, feature_info, batch_nodes, batch_wordlen = graph_batch
 
         if self.using_gpu > -1:
             fw_adj_info = fw_adj_info.cuda()
             bw_adj_info = bw_adj_info.cuda()
             feature_info = feature_info.cuda()
             batch_nodes = batch_nodes.cuda()
+            batch_wordlen = batch_wordlen.cuda()
+        # print batch_wordlen
         # TODO: whether to ADD padding index
-        feature_embedded = self.embedding(feature_info)
+        # feature_embedded = self.embedding(feature_info)
+
+        # mask_zeros = torch.zeros((batch_nodes.size()[0], batch_nodes.size()[1], self.hidden_layer_dim), dtype=torch.float).cuda()
+        # mask_ones = torch.ones((batch_nodes.size()[0], batch_nodes.size()[1], self.hidden_layer_dim), dtype=torch.float).cuda()
+        # for i in range(batch_nodes.size()[0]):
+        #     for j in range(batch_wordlen[i]):
+        #         mask_zeros[i][j] = torch.ones(self.hidden_layer_dim, dtype=torch.float).cuda()
+        #         mask_ones[i][j] = torch.zeros(self.hidden_layer_dim, dtype=torch.float).cuda()
+
+        feature_by_sentence = feature_info[:-1,:].view(batch_nodes.size()[0], -1)
+        feature_sentence_vector = self.embedding(feature_by_sentence)
+        output_vector, (ht,_) = self.embedding_bilstm(feature_sentence_vector)
+
+        # print output_vector[:,:,:self.hidden_layer_dim].size()
+        # print ht[0].size()
+        # return output_vector[:,:,:self.hidden_layer_dim], ht[0]
+
+        # return output_vector, ht.view(batch_nodes.size()[0], self.hidden_layer_dim)
+        
+        # feature_vector = output_vector[:,:,:self.hidden_layer_dim]*mask_ones + feature_sentence_vector*mask_zeros
+
+        feature_vector = output_vector.contiguous().view(-1, self.hidden_layer_dim)
+
+        feature_embedded = torch.cat([feature_vector, self.padding_vector.cuda()], 0)
+
+        # print feature_embedded.size()
+
+        # feature_embedded = output_vector*
 
         batch_size = feature_embedded.size()[0]
         node_repres = feature_embedded.view(batch_size, -1)
@@ -175,26 +208,35 @@ class GraphEncoder(nn.Module):
         # return
         fw_hidden = fw_hidden.view(-1, batch_nodes.size()
                                    [1], self.hidden_layer_dim)
+        # print fw_hidden.size()
         if self.graph_encode_direction == "bi":
             bw_hidden = bw_hidden.view(-1, batch_nodes.size()
                                        [1], self.hidden_layer_dim)
             hidden = torch.cat([fw_hidden, bw_hidden], 2)
         else:
             hidden = fw_hidden
+            # hidden = torch.cat([fw_hidden, output_vector], 2)
+            # hidden = (fw_hidden + output_vector)
         # print hidden.size()
         # hidden = F.relu(hidden)
 
-        if self.using_gpu:
-            self.Linear_hidden = self.Linear_hidden.cuda()
-        hidden_result = self.Linear_hidden(hidden)
+
+        # if self.using_gpu:
+        #     self.Linear_hidden = self.Linear_hidden.cuda()
+        # hidden_result = self.Linear_hidden(hidden)
 
         # hidden_result *= weights_matrix
         # hidden = F.relu(hidden)
         
-        pooled = torch.max(hidden_result, 1)[0]
-        graph_embedding = pooled.view(-1, self.hidden_layer_dim)
+        # pooled = torch.max(hidden, 1)[0]
+        # graph_embedding = pooled.view(-1, self.hidden_layer_dim)
+
         # shape of hidden: [batch_size, single_graph_nodes_size, 4 * hidden_layer_dim]
         # shape of graph_embedding: [batch_size, 4 * hidden_layer_dim]
         # hidden_result *= weights_matrix
 
-        return hidden_result, graph_embedding
+        # return output_vector*mask_zeros, ht.view(batch_nodes.size()[0], self.hidden_layer_dim), hidden*mask_ones
+        return output_vector, ht.view(batch_nodes.size()[0], self.hidden_layer_dim), hidden
+
+        # return hidden, graph_embedding
+        # return hidden, ht.view(batch_nodes.size()[0], self.hidden_layer_dim)

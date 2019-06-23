@@ -62,26 +62,28 @@ class SymbolsManager():
     def get_symbol_idx_for_list(self,l):
         r = []
         for i in range(len(l)):
-            # if l[i] not in ["\+"]:
+            # if l[i] not in [r'\+']:
                 r.append(self.get_symbol_idx(l[i]))
         return r
     
 class MinibatchLoader():
     def __init__(self, opt, mode, using_gpu, word_manager):
         data = pkl.load(open("{}/{}.pkl".format(opt.data_dir, mode), "rb" ))
-        if len(data) % opt.batch_size != 0:
-            n = len(data)
-            for i in range(len(data)%opt.batch_size):
-                data.insert(n-i-1, data[n-i-1])
+        # if len(data) % opt.batch_size != 0:
+        #     n = len(data)
+        #     for i in range(len(data)%opt.batch_size):
+        #         data.insert(n-i-1, data[n-i-1])
         graph_data = graph_utils.read_graph_data("{}/graph.{}".format(opt.data_dir, mode))
-        if len(graph_data) % opt.batch_size != 0:
-            n = len(graph_data)
-            for i in range(len(graph_data)%opt.batch_size):
-                graph_data.insert(n-i-1, graph_data[n-i-1])
+        # if len(graph_data) % opt.batch_size != 0:
+        #     n = len(graph_data)
+        #     for i in range(len(graph_data)%opt.batch_size):
+        #         graph_data.insert(n-i-1, graph_data[n-i-1])
 
         self.enc_batch_list = []
         self.enc_len_batch_list = []
         self.dec_batch_list = []
+        # used for copy
+        # self.enc_for_copy_list = []
         p = 0
         while p + opt.batch_size <= len(data):
             # build encoder matrix

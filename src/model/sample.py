@@ -34,9 +34,12 @@ if __name__ == "__main__":
     decoder = checkpoint["decoder"]
     attention_decoder = checkpoint["attention_decoder"]
     # put in eval mode for dropout
-    encoder.eval()
-    decoder.eval()
-    attention_decoder.eval()
+    # encoder.eval()
+    # decoder.eval()
+    # attention_decoder.eval()
+    encoder.train()
+    decoder.train()
+    attention_decoder.train()
     # initialize the vocabulary manager to display text
     managers = pkl.load( open("{}/map.pkl".format(args.data_dir), "rb" ) )
     word_manager, form_manager = managers
@@ -92,12 +95,29 @@ if __name__ == "__main__":
                 return flag
             if (ref_str == cand_str) == False and define_queries_order(ref_str, cand_str) == True:
                 add_acc += 1.0
+            # def vague_equal(ref, cand):
+            #     lr = re.split('[()]', ref)
+            #     lc = re.split('[()]', cand)
+            #     for c_word in lc:
+            #         ref = ref.replace(c_word.strip(),"")
+            #     return len(ref) == (ref.count('(')) + (ref.count(')')) + (ref.count(' '))
+            # if (ref_str == cand_str) == False and vague_equal(ref_str, cand_str) == True:
+            #     add_acc += 1.0
 
             reference_list.append(reference)
             candidate_list.append(candidate)
-
+            # print to console
+            if args.display > 0:
+                if ref_str != cand_str:
+                    print "index: ", i
+                    print(" ".join(x[0]))
+                    print(ref_str)
+                    print(cand_str)
+                # print(' ')
+                pass
             output.write("{}\n".format(ref_str))
             output.write("{}\n".format(cand_str))
+        print add_acc/len(data)
         val_acc = data_utils.compute_tree_accuracy(candidate_list, reference_list, form_manager) + add_acc/len(data)
         print("ACCURACY = {}\n".format(val_acc))
         output.write("ACCURACY = {}\n".format(val_acc))

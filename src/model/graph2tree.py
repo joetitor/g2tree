@@ -47,8 +47,14 @@ class Dec_LSTM(nn.Module):
     def __init__(self, opt):
         super(Dec_LSTM, self).__init__()
         self.opt = opt
-        self.i2h = nn.Linear(2*opt.rnn_size, 4*opt.rnn_size)
+
+        self.word_embedding_size = 300
+
+        self.i2h = nn.Linear(self.word_embedding_size+opt.rnn_size, 4*opt.rnn_size)
         self.h2h = nn.Linear(opt.rnn_size, 4*opt.rnn_size)
+
+
+
         if opt.dropoutrec > 0:
             self.dropout = nn.Dropout(opt.dropoutrec)
 
@@ -71,14 +77,17 @@ class DecoderRNN(nn.Module):
         super(DecoderRNN, self).__init__()
         self.opt = opt
         self.hidden_size = opt.rnn_size
-        self.word_embedding_size = self.hidden_size
+        # self.word_embedding_size = self.hidden_size
+        self.word_embedding_size = 300
         self.embedding = nn.Embedding(input_size, self.word_embedding_size, padding_idx=0)
 
         self.lstm = Dec_LSTM(self.opt)
         if opt.dropout > 0:
             self.dropout = nn.Dropout(opt.dropout)
 
+    # def forward(self, input_src, prev_c, prev_h, parent_h, hidden_for_feed):
     def forward(self, input_src, prev_c, prev_h, parent_h):
+
         src_emb = self.embedding(input_src) # batch_size x src_length x emb_size
         if self.opt.dropout > 0:
             src_emb = self.dropout(src_emb)
@@ -90,8 +99,12 @@ class AttnUnit(nn.Module):
         super(AttnUnit, self).__init__()
         self.opt = opt
         self.hidden_size = opt.rnn_size
+        self.separate_attention = False
+        if self.separate_attention:
+            self.linear_att = nn.Linear(3*self.hidden_size, self.hidden_size)
+        else:
+            self.linear_att = nn.Linear(2*self.hidden_size, self.hidden_size)
 
-        self.linear_att = nn.Linear(2*self.hidden_size, self.hidden_size)
         self.linear_out = nn.Linear(self.hidden_size, output_size)
         if opt.dropout > 0:
             self.dropout = nn.Dropout(opt.dropout)
@@ -99,17 +112,32 @@ class AttnUnit(nn.Module):
         self.softmax = nn.Softmax(dim=1)
         self.logsoftmax = nn.LogSoftmax(dim=1)
 
-    def forward(self, enc_s_top, dec_s_top):
+    def forward(self, enc_s_top, dec_s_top, enc_2):
+        # enc_s_top: [batch_size, sentence_length, hidden_size]
+        # dec_s_top: [batch_size, hidden_size]
         dot = torch.bmm(enc_s_top, dec_s_top.unsqueeze(2))
+        # dot: [batch_size, sentence_length, 1]
         attention = self.softmax(dot.squeeze(2)).unsqueeze(2)
- 
+        # attention: [batch_size, sentence_length, 1]
+        # enc_s_top.premute(0,2,1): [batch_size, hidden_size, sentence_length]
         enc_attention = torch.bmm(enc_s_top.permute(0,2,1), attention)
-        hid = F.tanh(self.linear_att(torch.cat((enc_attention.squeeze(2),dec_s_top), 1)))
+        # enc_attention: [batch_size, hidden_size, 1]
+
+        if self.separate_attention:
+            dot_2 = torch.bmm(enc_2, dec_s_top.unsqueeze(2))
+            attention_2 = self.softmax(dot_2.squeeze(2)).unsqueeze(2)
+            enc_attention_2 = torch.bmm(enc_2.permute(0,2,1), attention_2)
+
+        if self.separate_attention:
+            hid = F.tanh(self.linear_att(torch.cat((enc_attention.squeeze(2), enc_attention_2.squeeze(2),dec_s_top), 1)))
+        else:
+            hid = F.tanh(self.linear_att(torch.cat((enc_attention.squeeze(2),dec_s_top), 1)))
         h2y_in = hid
         if self.opt.dropout > 0:
             h2y_in = self.dropout(h2y_in)
         h2y = self.linear_out(h2y_in)
         pred = self.logsoftmax(h2y)
+        # return pred, h2y_in
         return pred
 
 def eval_training(opt, train_loader, encoder, decoder, attention_decoder, encoder_optimizer, decoder_optimizer, attention_decoder_optimizer, criterion, using_gpu, word_manager, form_manager):
@@ -117,6 +145,7 @@ def eval_training(opt, train_loader, encoder, decoder, attention_decoder, encode
     decoder_optimizer.zero_grad()
     attention_decoder_optimizer.zero_grad()
     enc_batch, enc_len_batch, dec_tree_batch = train_loader.random_batch()
+    # print enc_batch
 
     enc_max_len = enc_len_batch
 
@@ -124,14 +153,27 @@ def eval_training(opt, train_loader, encoder, decoder, attention_decoder, encode
     if using_gpu:
         enc_outputs = enc_outputs.cuda()
     
+    # print enc_batch
+    
+    # print enc_batch
     fw_adj_info = torch.tensor(enc_batch['g_fw_adj'])
     bw_adj_info = torch.tensor(enc_batch['g_bw_adj'])
     feature_info = torch.tensor(enc_batch['g_ids_features'])
     batch_nodes = torch.tensor(enc_batch['g_nodes'])
+    batch_wordlen = torch.tensor(enc_batch['word_len'])
 
-    node_embedding, graph_embedding = encoder((fw_adj_info,bw_adj_info,feature_info,batch_nodes))
+    # node_embedding, graph_embedding, _ = encoder((fw_adj_info,bw_adj_info,feature_info,batch_nodes, batch_wordlen))
+    # enc_outputs = node_embedding
+    node_embedding, graph_embedding, structural_info = encoder((fw_adj_info,bw_adj_info,feature_info,batch_nodes, batch_wordlen))
+    # print node_embedding.size()
+    # print structural_info.size()
+
+    # l1 = nn.Linear(2*opt.rnn_size, opt.rnn_size).cuda()
+    # enc_outputs = l1(torch.cat([node_embedding, structural_info],2))
+    # enc_outputs = (node_embedding+structural_info)/2
     enc_outputs = node_embedding
-    
+    # enc_outputs = torch.cat([node_embedding,structural_info], 1)
+
     graph_cell_state = torch.zeros((opt.batch_size, opt.rnn_size), dtype=torch.float, requires_grad=True)
     graph_hidden_state = torch.zeros((opt.batch_size, opt.rnn_size), dtype=torch.float, requires_grad=True)
     if using_gpu:
@@ -215,8 +257,12 @@ def eval_training(opt, train_loader, encoder, decoder, attention_decoder, encode
         parent_h = dec_s[cur_index][0][2]
         # parent_h = [graph_embedding, dec_s[cur_index][0][2]]
         for i in range(dec_batch[cur_index].size(1) - 1):
+            # if i == 0:
+            #     hidden_for_feed = torch.zeros((opt.batch_size, opt.rnn_size), dtype=torch.float, requires_grad=True)
+            #     if using_gpu:
+            #         hidden_for_feed = hidden_for_feed.cuda()
             dec_s[cur_index][i+1][1], dec_s[cur_index][i+1][2] = decoder(dec_batch[cur_index][:,i], dec_s[cur_index][i][1], dec_s[cur_index][i][2], parent_h)
-            pred = attention_decoder(enc_outputs, dec_s[cur_index][i+1][2])
+            pred = attention_decoder(enc_outputs, dec_s[cur_index][i+1][2], structural_info)
 
             loss += criterion(pred, dec_batch[cur_index][:,i+1])
         cur_index = cur_index + 1
@@ -267,10 +313,18 @@ def do_generate(encoder, decoder, attention_decoder, graph_input, word_manager, 
     bw_adj_info = torch.tensor(graph_input['g_bw_adj'])
     feature_info = torch.tensor(graph_input['g_ids_features'])
     batch_nodes = torch.tensor(graph_input['g_nodes'])
+    batch_wordlen = torch.tensor(graph_input['word_len'])
 
-    node_embedding, graph_embedding = encoder((fw_adj_info,bw_adj_info,feature_info,batch_nodes))
+    # node_embedding, graph_embedding, _ = encoder((fw_adj_info,bw_adj_info,feature_info,batch_nodes, batch_wordlen))
+    # enc_outputs = node_embedding
+    node_embedding, graph_embedding, structural_info = encoder((fw_adj_info,bw_adj_info,feature_info,batch_nodes, batch_wordlen))
+    # l2 = nn.Linear(2*opt.rnn_size, opt.rnn_size).cuda()
+    # enc_outputs = l2(torch.cat([node_embedding, structural_info],2))
+    # enc_outputs = (node_embedding+structural_info)/2
     enc_outputs = node_embedding
-    
+    # enc_outputs = torch.cat([node_embedding,structural_info], 1)
+
+
     prev_c = graph_embedding
     prev_h = graph_embedding
 
@@ -291,8 +345,15 @@ def do_generate(encoder, decoder, attention_decoder, graph_input, word_manager, 
         i_child = 1
         while True:
             # curr_c, curr_h = decoder(prev_word, s[0], s[1], [graph_embedding, parent_h])
+
+            # if i_child == 1:
+            #     hidden_for_feed = torch.zeros((1, opt.rnn_size), dtype=torch.float, requires_grad=False)
+            #     if using_gpu:
+            #         hidden_for_feed = hidden_for_feed.cuda()
+
+            # print s[0].size()
             curr_c, curr_h = decoder(prev_word, s[0], s[1], parent_h)
-            prediction = attention_decoder(enc_outputs, curr_h)
+            prediction = attention_decoder(enc_outputs, curr_h, structural_info)
             s = (curr_c, curr_h)
             _, _prev_word = prediction.max(1)
             prev_word = _prev_word
@@ -418,10 +479,87 @@ def main(opt):
             end_time = time.time()
             print("{}/{}, train_loss = {}, time since last print = {}".format( i, iterations, train_loss, (end_time - start_time)/60))
             start_time = time.time()
+
+         
+            test_checkpoint = torch.load("checkpoint_dir/model_seq2seq")
+            test_encoder = test_checkpoint["encoder"]
+            test_decoder = test_checkpoint["decoder"]
+            test_attention_decoder = test_checkpoint["attention_decoder"]
+
+            # test_encoder.eval()
+            # test_decoder.eval()
+            # test_attention_decoder.eval()
+            if i / opt.print_every > 0:
+                # show accuracy in train & test dataset
+                data = pkl.load(open("{}/test.pkl".format(opt.data_dir), "rb"))
+                graph_test_list = graph_utils.read_graph_data("{}/graph.test".format(opt.data_dir))
+                reference_list = []
+                candidate_list = []
+                add_acc = 0.0
+                for i in range(len(data)):
+                    # print("example {}\n".format(i))
+                    x = data[i]
+                    reference = x[1]
+                    graph_batch = graph_utils.cons_batch_graph([graph_test_list[i]])
+                    graph_input = graph_utils.vectorize_batch_graph(graph_batch, word_manager)
+
+                    candidate = do_generate(test_encoder, test_decoder, test_attention_decoder, graph_input, word_manager, form_manager, args, using_gpu, test_checkpoint)
+                    candidate = [int(c) for c in candidate]
+
+                    num_left_paren = sum(1 for c in candidate if form_manager.idx2symbol[int(c)]== "(")
+                    num_right_paren = sum(1 for c in candidate if form_manager.idx2symbol[int(c)]== ")")
+                    diff = num_left_paren - num_right_paren
+                    #print(diff)
+                    if diff > 0:
+                        for i in range(diff):
+                            candidate.append(form_manager.symbol2idx[")"])
+                    elif diff < 0:
+                        candidate = candidate[:diff]
+        
+                    ref_str = convert_to_string(reference, form_manager)
+                    cand_str = convert_to_string(candidate, form_manager)
+
+                    
+                    def define_queries_order(str1, str2):
+                        c_str = str2.replace(") ,", ") @")
+                        c_list = c_str.strip().split("@")
+                        flag = True
+                        r_str = str1
+                        for c_phrase in c_list:
+                            if c_phrase.strip() in str1:
+                                r_str = r_str.replace(c_phrase.strip(), "")
+                            else:
+                                flag = False
+                        if len(r_str) != (r_str.count(",") + r_str.count(" ")):
+                            flag = False
+                        return flag
+                    if (ref_str == cand_str) == False and define_queries_order(ref_str, cand_str) == True:
+                        add_acc += 1.0
+                    # def vague_equal(ref, cand):
+                    #     lr = re.split('[()]', ref)
+                    #     lc = re.split('[()]', cand)
+                    #     for c_word in lc:
+                    #         ref = ref.replace(c_word.strip(),"")
+                    #     return len(ref) == (ref.count('(')) + (ref.count(')')) + (ref.count(' '))
+                    # if (ref_str == cand_str) == False and vague_equal(ref_str, cand_str) == True:
+                    #     add_acc += 1.0
+
+                    reference_list.append(reference)
+                    candidate_list.append(candidate)
+                print add_acc/len(data)
+                val_acc = data_utils.compute_tree_accuracy(candidate_list, reference_list, form_manager) + add_acc / len(data)
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    torch.save(test_checkpoint, "{}/best_model_seq2seq".format(opt.checkpoint_dir))
+                print("ACCURACY = {}\n".format(val_acc))
+            # test_encoder.train()
+            # test_decoder.train()
+            # test_attention_decoder.train()
         
         if train_loss != train_loss:
             print('loss is NaN.  This usually indicates a bug.')
             break
+    print "best_acc: ",best_val_acc
 
 
 if __name__ == "__main__":
